@@ -5,7 +5,7 @@
 
 class ReviewzonWocommerceCron{
 	
-	const interval = "hourly";
+	const interval = "twicedaily";
 	const hook = 'schedule_posts_to_product';
 	static $meta_keys = array(
 		'ReviewAZON_ListPrice' => '_regular_price',
@@ -43,25 +43,22 @@ class ReviewzonWocommerceCron{
 	 * */
 	static function schedule_posts_to_product(){
 		
-		self::handle_categories();
-		
-		
 		$posts = self::get_100_posts();
-		var_dump($posts);
-	
+	//	var_dump($posts);
 		if(!empty($posts)) :
-			global $wpdb;	
-			
+			global $wpdb;
 			
 			foreach($posts as $post){
 				$wpdb->update($wpdb->posts, array('post_type'=>'product', 'post_status'=>'publish', 'post_name'=>sanitize_title($post['post_name']), 'post_content'=>'', 'post_excerpt'=>''), array('ID'=>$post['ID']), array('%s', '%s', '%s', '%s', '%s'), array('%d'));
 				$ID = $post['ID'];
-				
-				$categories = wp_get_object_terms($ID, 'category', array('fields' => 'names'));
-				
-				wp_set_object_terms($ID, $categories, 'product_cat');
-				
-							
+				//updating term taxonomy table
+				$sql_1 = "UPDATE $wpdb->term_taxonomy AS tt
+					INNER JOIN $wpdb->term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
+					SET tt.taxonomy = 'product_cat'
+					WHERE tr.object_id = '$ID'
+					AND tt.taxonomy = 'category'
+				";
+				$wpdb->query($sql_1);
 				
 				$sql_2 = "UPDATE $wpdb->term_taxonomy AS tt
 					INNER JOIN $wpdb->term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
@@ -75,7 +72,7 @@ class ReviewzonWocommerceCron{
 				$wpdb->insert($wpdb->postmeta, array('post_id'=>$post['ID'], 'meta_key'=>'_regular_price', 'meta_value'=>$post['_regular_price']), array('%d', '%s', '%s'));
 				$wpdb->insert($wpdb->postmeta, array('post_id'=>$post['ID'], 'meta_key'=>'_sale_price', 'meta_value'=>$post['_price']), array('%d', '%s', '%s'));
 				$wpdb->insert($wpdb->postmeta, array('post_id'=>$post['ID'], 'meta_key'=>'_visibility', 'meta_value'=>'visible'), array('%d', '%s', '%s'));
-						
+								
 			}
 		endif;
 			
@@ -110,7 +107,7 @@ class ReviewzonWocommerceCron{
 			AND $wpdb->posts.post_type = 'post'
 			AND (($wpdb->posts.post_status = 'publish') OR ($wpdb->posts.post_status = 'draft') OR ($wpdb->posts.post_status = 'future'))
 			ORDER BY $wpdb->posts.post_date ASC
-			LIMIT 100
+			LIMIT 200
 		";
 		
 		
@@ -143,47 +140,4 @@ class ReviewzonWocommerceCron{
 	}
 	
 	
-	/*
-	 * handle eveything about taxonomy
-	 * */
-	static function handle_categories(){
-		$category_ids = self::get_top_level_categories();
-		//var_dump($category_ids);
-		if($category_ids){
-			foreach($category_ids as $cat_id){
-				self::recursively_insert_terms($cat_id);
-			}
-		}		
-	}
-	
-	
-	static function recursively_insert_terms($cat_id, $parent = 0){
-		$category = get_term($cat_id, 'category');
-	//	var_dump($category);
-		var_dump(wp_insert_term($category->name, 'product_cat', array('parent' => $parent)));
-		$sub_category_ids = self::get_top_level_categories($cat_id);
-		if($sub_category_ids){
-			foreach($sub_category_ids as $sub_cat_id){
-				self::recursively_insert_terms($sub_cat_id, $cat_id);
-			}
-		}
-	}
-	
-	/*
-	 * function to get the parent categories
-	 * */
-	function get_top_level_categories($parent = 0){
-		global $wpdb;		
-		$sql = "SELECT $wpdb->terms.term_id FROM $wpdb->terms
-				INNER JOIN $wpdb->term_taxonomy
-				ON $wpdb->terms.term_id = $wpdb->term_taxonomy.term_id
-				WHERE $wpdb->term_taxonomy.taxonomy = 'category'
-				AND $wpdb->term_taxonomy.parent = $parent
-				AND $wpdb->term_taxonomy.count > 0
-				ORDER BY $wpdb->terms.name ASC
-		";
-			//
-		return $wpdb->get_col($sql);
-	}
-		
 }
