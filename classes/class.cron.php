@@ -12,11 +12,18 @@ class ReviewzonWocommerceCron{
 		'ReviewAZON_LowestNewPrice' => '_price',		
 	);
 	
+	static $meta_keys_to_parse = array('ReviewAZON_ASIN', 'ReviewAZON_ProductFeatures', 'ReviewAZON_Description', 'ReviewAZON_SmallImage', 'ReviewAZON_MediumImage', 'ReviewAZON_LargeImage', 'ReviewAZON_Brand', 'ReviewAZON_ListPrice', 'ReviewAZON_LowestNewPrice', 'ReviewAZON_Manufacturer', 'ReviewAZON_Model', 'ReviewAZON_OfferListingId');
+	
 	//contains all the hooks
 	static function init(){
-		register_activation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'create_scheduler'));
-		register_deactivation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'clear_scheduler'));
-		add_action(self::hook, array(get_class(), 'schedule_posts_to_product'));
+		//register_activation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'create_scheduler'));
+		//register_deactivation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'clear_scheduler'));
+		//add_action(self::hook, array(get_class(), 'schedule_posts_to_product'));
+		//add_action('wp_insert_post', array(get_class(), 'wp_insert_post'), 100, 2);
+	}
+	
+	static function wp_insert_post($post_id, $post){
+		return update_post_meta($post_id, 'wpcommerce_status', '0');
 	}
 	
 	/*
@@ -43,39 +50,87 @@ class ReviewzonWocommerceCron{
 	 * */
 	static function schedule_posts_to_product(){
 		
-		self::handle_categories();
+		
 		
 		
 		$posts = self::get_100_posts();
-		var_dump($posts);
+		
+		//var_dump($posts);
+		//print_r($posts);
+		//die();
+		
 	
 		if(!empty($posts)) :
 			global $wpdb;	
 			
+			self::handle_categories();
 			
 			foreach($posts as $post){
-				$wpdb->update($wpdb->posts, array('post_type'=>'product', 'post_status'=>'publish', 'post_name'=>sanitize_title($post['post_name']), 'post_content'=>'', 'post_excerpt'=>''), array('ID'=>$post['ID']), array('%s', '%s', '%s', '%s', '%s'), array('%d'));
-				$ID = $post['ID'];
 				
-				$categories = wp_get_object_terms($ID, 'category', array('fields' => 'names'));
+				$post_data = array('post_title'=>$post->post_title, 'post_type'=>'product', 'post_status'=>'publish', 'post_content'=>'', 'post_excerpt'=>'');
+			
+				//$wpdb->insert($wpdb->posts, array('post_title'=>$post->post_title, 'post_type'=>'product', 'post_status'=>'publish', 'post_name'=>sanitize_title($post->post_name), 'post_content'=>'', 'post_excerpt'=>'', 'post_date'=>$post->post_date, 'post_date_gmt'=> $post->post_date_gmt), array('%s', '%s', '%s', '%s', '%s', '%s', '%s'));
 				
-				wp_set_object_terms($ID, $categories, 'product_cat');
-				
+				$ID = wp_insert_post($post_data);
 							
 				
-				$sql_2 = "UPDATE $wpdb->term_taxonomy AS tt
-					INNER JOIN $wpdb->term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
-					SET tt.taxonomy = 'product_tag'
-					WHERE tr.object_id = '$ID'
-					AND tt.taxonomy = 'post_tag'
-				";				
-				$wpdb->query($sql_2);
-				
-				$wpdb->insert($wpdb->postmeta, array('post_id'=>$post['ID'], 'meta_key'=>'_price', 'meta_value'=>$post['_price']), array('%d', '%s', '%s'));
-				$wpdb->insert($wpdb->postmeta, array('post_id'=>$post['ID'], 'meta_key'=>'_regular_price', 'meta_value'=>$post['_regular_price']), array('%d', '%s', '%s'));
-				$wpdb->insert($wpdb->postmeta, array('post_id'=>$post['ID'], 'meta_key'=>'_sale_price', 'meta_value'=>$post['_price']), array('%d', '%s', '%s'));
-				$wpdb->insert($wpdb->postmeta, array('post_id'=>$post['ID'], 'meta_key'=>'_visibility', 'meta_value'=>'visible'), array('%d', '%s', '%s'));
+				if($ID) :
+					
+					$current_time = current_time('timestamp');
+					
+					update_post_meta($post->ID, 'woocommerce_id', $ID);
+					update_post_meta($ID, 'post_id', $post->ID);
+					
+					$wpdb->insert($wpdb->postmeta, array('post_id'=>$ID, 'meta_key'=>'update_time', 'meta_value'=>current_time('timestamp')), array('%d', '%s', '%s'));
+									
+					update_post_meta($ID, 'update_time', $current_time);
+					
+					$categories = wp_get_object_terms($post->ID, 'category', array('fields' => 'names'));					
+					wp_set_object_terms($ID, $categories, 'product_cat');
+					
+					
+					
+					$tags = wp_get_object_terms($post->ID, 'post_tag', array('fields' => 'names'));
+					wp_set_object_terms($ID, $tags, 'product_tag');
+					
+					
+					
+					$meta_infos = $wpdb->get_results("SELECT meta_key, meta_value FROM $wpdb->postmeta WHERE post_id = $post->ID");
+					
+					if($meta_infos) :
+					
+						$wpdb->insert($wpdb->postmeta, array('post_id'=>$ID, 'meta_key'=>'_visibility', 'meta_value'=>'visible'), array('%d', '%s', '%s'));
 						
+						update_post_meta($ID, '_visibility', 'visible');
+								
+						foreach($meta_infos as $meta_info){
+							if(in_array($meta_info->meta_key, self::$meta_keys_to_parse)){
+								switch($meta_info->meta_key){
+									case 'ReviewAZON_ListPrice' :										
+										update_post_meta($ID, '_regular_price', self::sanitize_price($meta_info->meta_value));
+										break;
+										
+									case 'ReviewAZON_LowestNewPrice' :
+										$price = self::sanitize_price($meta_info->meta_value);
+										update_post_meta($ID, '_price', $price);
+										update_post_meta($ID, '_sale_price', $price);
+										break;
+										
+									default :										
+										update_post_meta($ID, $meta_info->meta_key, $meta_info->meta_value);
+										break;
+								}
+								
+							}						
+						}	
+					
+					endif;				
+					
+					
+					
+					
+				
+				endif;		
 			}
 		endif;
 			
@@ -90,48 +145,28 @@ class ReviewzonWocommerceCron{
 		global $wpdb;
 		
 		
-		/*
-		$sql = "SELECT ID, post_title FROM $wpdb->posts 
-			INNER JOIN $wpdb->postmeta
-			ON $wpdb->posts.ID = $wpdb->postmeta.post_id
-			WHERE $wpdb->postmeta.meta_key = 'ReviewAZON_LowestNewPrice'
-			AND $wpdb->posts.post_type = 'post'
-			AND $wpdb->posts.post_status = 'draft'
-			ORDER BY $wpdb->posts.post_date ASC
-			LIMIT 200
-		";
-		*/		 
 		 
+		 /*
 		
-		$sql = "SELECT ID, post_title FROM $wpdb->posts 
+		$sql = "SELECT $wpdb->posts.ID, $wpdb->posts.post_title FROM $wpdb->posts 
 			INNER JOIN $wpdb->postmeta
 			ON $wpdb->posts.ID = $wpdb->postmeta.post_id
 			WHERE $wpdb->postmeta.meta_key = 'ReviewAZON_LowestNewPrice'
+			AND $wpdb->postmeta.meta_value = '267'
 			AND $wpdb->posts.post_type = 'post'
 			AND (($wpdb->posts.post_status = 'publish') OR ($wpdb->posts.post_status = 'draft') OR ($wpdb->posts.post_status = 'future'))
 			ORDER BY $wpdb->posts.post_date ASC
 			LIMIT 100
 		";
-		
-		
-		$post_ids = $wpdb->get_results($sql);		
-		
-		$posts = array();
-		if($post_ids){
-			foreach($post_ids as $post_id){
-				
-				$posts[] = array(
-					'ID' => $post_id->ID,
-					'post_name' => $post_id->post_title,
-					'_price' => self::sanitize_price(get_post_meta($post_id->ID, 'ReviewAZON_LowestNewPrice', true)),
-					'_regular_price' => self::sanitize_price(get_post_meta($post_id->ID, 'ReviewAZON_ListPrice', true))
-				);
-			}
+		* */
+	
+		$sql = "select ID, post_title from wp_posts where ID in (
+						select c.post_id from(
+							SELECT count(*) as num, post_id  FROM `wp_postmeta` WHERE `meta_key` LIKE 'ReviewAZON_LowestNewPrice' or meta_key like 'woocommerce_id'  group by post_id 
+						) c where  c.num=1
+		)" ;
 			
-						
-		}
-					
-		//var_dump($posts);
+		$posts = $wpdb->get_results($sql);		
 		return $posts;
 	}
 	
@@ -160,7 +195,7 @@ class ReviewzonWocommerceCron{
 	static function recursively_insert_terms($cat_id, $parent = 0){
 		$category = get_term($cat_id, 'category');
 	//	var_dump($category);
-		var_dump(wp_insert_term($category->name, 'product_cat', array('parent' => $parent)));
+		wp_insert_term($category->name, 'product_cat', array('parent' => $parent));
 		$sub_category_ids = self::get_top_level_categories($cat_id);
 		if($sub_category_ids){
 			foreach($sub_category_ids as $sub_cat_id){

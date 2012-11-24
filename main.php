@@ -1,7 +1,7 @@
 <?php
 /*
  * plugin name: ReviewZon With Wocommerce
- * Description: Reviewzon plugin stores data in database and Wocommerce sells these products
+ * Description: This is the cron script to convert post data into product to sell with woocommerce
  * author: Sohag
  * */
 
