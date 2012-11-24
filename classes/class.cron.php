@@ -1,4 +1,5 @@
 <?php
+set_time_limit(0);
 /*
  * Handles the cron jobs
  * */
@@ -16,15 +17,59 @@ class ReviewzonWocommerceCron{
 	
 	//contains all the hooks
 	static function init(){
-		//register_activation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'create_scheduler'));
-		//register_deactivation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'clear_scheduler'));
-		//add_action(self::hook, array(get_class(), 'schedule_posts_to_product'));
+		register_activation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'create_scheduler'));
+		register_deactivation_hook(ReviewzonWocommerce_FILE, array(get_class(), 'clear_scheduler'));
+		add_action(self::hook, array(get_class(), 'schedule_posts_to_product'));
 		//add_action('wp_insert_post', array(get_class(), 'wp_insert_post'), 100, 2);
+		
+		add_action('after_delete_post', array(get_class(), 'delete_associated_product'));
+		
+		add_action('admin_menu', array(get_class(), 'admin_menu'));
 	}
 	
-	static function wp_insert_post($post_id, $post){
-		return update_post_meta($post_id, 'wpcommerce_status', '0');
+	
+	static function admin_menu(){
+		add_options_page('woocommerce site with amazon pro', 'Wocommerce Corn', 'manage_options', 'woocommerce-with-amazon', array(get_class(), 'content'));
 	}
+	
+	static function content(){
+		?>
+			
+			<div class="wrap">
+				<h2> Cron Jobs </h2>
+				
+			<p>	Basically posts are converted to products with wordpess default cron. </p>
+				
+				<p> Run the corn script to upate the existing products form respective posts (2/3 times daily is recommened) </p>
+				
+				<table class="form-table">
+					<tr>
+						<td>Cron script directory</td>
+						<td colspan="2"> <input size="85" type="text" readonly value="<?php echo ReviewzonWocommerce_DIR . '/cron/cron.php'; ?>"> </td>
+					</tr>
+					<tr>
+						<td>Cron script URL</td>
+						<td colspan="2"> <input size="85" type="text" readonly value="<?php echo ReviewzonWocommerce_URL . '/cron/cron.php'; ?>"> </td>
+					</tr>
+					
+				</table>
+				
+			</div>
+			
+		<?php
+	}
+	
+	
+	/*
+		if a post is deleted, it deletes associated post
+	*/
+	static function delete_associated_product($post_id){
+		global $wpdb;
+		$product_id = $wpdb->get_var("SELECT post_id FROM $wpdb->postmeta WHERE meta_key = 'post_id' AND meta_value = '$post_id'");
+		
+		wp_delete_post($product_id, true);
+	}
+	
 	
 	/*
 	 * handle scheduler
@@ -48,22 +93,17 @@ class ReviewzonWocommerceCron{
 	/*
 	 * do everything
 	 * */
-	static function schedule_posts_to_product(){
-		
-		
-		
+	static function schedule_posts_to_product(){		
 		
 		$posts = self::get_100_posts();
+				
 		
-		//var_dump($posts);
-		//print_r($posts);
-		//die();
-		
-	
 		if(!empty($posts)) :
 			global $wpdb;	
 			
 			self::handle_categories();
+			
+			$current_time = current_time('timestamp');
 			
 			foreach($posts as $post){
 				
@@ -74,16 +114,14 @@ class ReviewzonWocommerceCron{
 				$ID = wp_insert_post($post_data);
 							
 				
-				if($ID) :
-					
-					$current_time = current_time('timestamp');
+				if($ID) :					
 					
 					update_post_meta($post->ID, 'woocommerce_id', $ID);
 					update_post_meta($ID, 'post_id', $post->ID);
-					
-					$wpdb->insert($wpdb->postmeta, array('post_id'=>$ID, 'meta_key'=>'update_time', 'meta_value'=>current_time('timestamp')), array('%d', '%s', '%s'));
+								
 									
 					update_post_meta($ID, 'update_time', $current_time);
+					update_post_meta($post->ID, 'parse_time', $current_time);
 					
 					$categories = wp_get_object_terms($post->ID, 'category', array('fields' => 'names'));					
 					wp_set_object_terms($ID, $categories, 'product_cat');
@@ -144,28 +182,14 @@ class ReviewzonWocommerceCron{
 	static function get_100_posts(){
 		global $wpdb;
 		
-		
-		 
-		 /*
-		
-		$sql = "SELECT $wpdb->posts.ID, $wpdb->posts.post_title FROM $wpdb->posts 
-			INNER JOIN $wpdb->postmeta
-			ON $wpdb->posts.ID = $wpdb->postmeta.post_id
-			WHERE $wpdb->postmeta.meta_key = 'ReviewAZON_LowestNewPrice'
-			AND $wpdb->postmeta.meta_value = '267'
-			AND $wpdb->posts.post_type = 'post'
-			AND (($wpdb->posts.post_status = 'publish') OR ($wpdb->posts.post_status = 'draft') OR ($wpdb->posts.post_status = 'future'))
-			ORDER BY $wpdb->posts.post_date ASC
-			LIMIT 100
-		";
-		* */
-	
-		$sql = "select ID, post_title from wp_posts where ID in (
-						select c.post_id from(
-							SELECT count(*) as num, post_id  FROM `wp_postmeta` WHERE `meta_key` LIKE 'ReviewAZON_LowestNewPrice' or meta_key like 'woocommerce_id'  group by post_id 
-						) c where  c.num=1
-		)" ;
 			
+			
+		$sql = "select ID, post_title from $wpdb->posts where ID in (
+						select c.post_id from(
+							SELECT count(*) as num, post_id  FROM `$wpdb->postmeta` WHERE `meta_key` LIKE 'ReviewAZON_LowestNewPrice' or meta_key like 'woocommerce_id'  group by post_id 
+						) c where  c.num=1
+		)" ;	
+		
 		$posts = $wpdb->get_results($sql);		
 		return $posts;
 	}
@@ -220,5 +244,71 @@ class ReviewzonWocommerceCron{
 			//
 		return $wpdb->get_col($sql);
 	}
+	
+	
+	
+	/*
+	 * product_update shceduler
+	 * */
+	static function schedule_product_update(){
+		
+		
+		$posts = self::get_products();
+		if($posts) :
+			$time = current_time('timestamp');
+			global $wpdb;
+			foreach($posts as $key => $post){
+				$regular_price = self::sanitize_price($post['ReviewAZON_ListPrice']);
+				$sale_price = self::sanitize_price($post['ReviewAZON_LowestNewPrice']);
+				
+				update_post_meta($post['woocommerce_id'], '_sale_price', $sale_price);
+				update_post_meta($post['woocommerce_id'], '_price', $sale_price);
+				update_post_meta($post['woocommerce_id'], '_regular_price', $regular_price);
+				update_post_meta($post['woocommerce_id'], 'update_time', $time);
+				update_post_meta($key, 'parse_time', $time);
+				
+				/*
+				$wpdb->update($wpdb->postmeta, array('meta_value'=>$list_price), array('post_id'=>(int)$post['woocommerce_id'], 'meta_key'=>'_regular_price'));
+				$wpdb->update($wpdb->postmeta, array('meta_value'=>$sale_price), array('post_id'=>(int)$post['woocommerce_id'], 'meta_key'=>'_price'));
+				$wpdb->update($wpdb->postmeta, array('meta_value'=>$sale_price), array('post_id'=>(int)$post['woocommerce_id'], 'meta_key'=>'sale_price'));
+				$wpdb->update($wpdb->postmeta, array('meta_value'=>$sale_price), array('post_id'=>(int)$post['woocommerce_id'], 'meta_key'=>'sale_price'));
+				$wpdb->update($wpdb->postmeta, array('meta_value'=>$time), array('post_id'=>(int)$post['woocommerce_id'], 'meta_key'=>'update_time'));
+				$wpdb->update($wpdb->postmeta, array('meta_value'=>$time), array('post_id'=>(int)$key, 'meta_key'=>'parse_time'));
+				*/ 
+			}
+			
+		endif;
+	}
+	
+	
+	/*
+	 * get products to update
+	 * */
+	static function get_products(){
+		global $wpdb;
+		$time = current_time('timestamp') - 24 * 60 * 60 ;
+			
+		$sql = " SELECT post_id, meta_key, meta_value FROM $wpdb->postmeta WHERE post_id IN
+			( SELECT post_id FROM $wpdb->postmeta WHERE meta_key = 'parse_time' AND meta_value < $time )
+			
+			AND (meta_key LIKE 'woocommerce_id' OR meta_key LIKE 'ReviewAZON_LowestNewPrice' OR meta_key LIKE 'ReviewAZON_ListPrice')
+			
+			";
+		
+		
+		$posts_metas = $wpdb->get_results($sql);
+		$posts = array();
+		
+		if($posts_metas){			
+			foreach($posts_metas as $post){
+				$posts[$post->post_id][$post->meta_key] = $post->meta_value;				
+			}		
+		}
+		
+		return $posts;
+		
+	}
+	
+	
 		
 }
